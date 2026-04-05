@@ -1,7 +1,7 @@
 {
-  "short_description": "EPSILON-AETHER: JL-projected S^31 geometric attention scoring + block sparsity (12L, int5/int6, SmearGate, SWA)",
+  "short_description": "EPSILON-AETHER: Riemannian-Sphere Sphere Embedding + S^31 JL-Projected Sparse Attention + Thermodynamic LR + 12L GPT",
   "interesting": true,
   "record_on_date": true,
-  "val_bpb": null,
-  "notes": "Uses Epsilon Johnson-Lindenstrauss bridge to map queries/keys to S^31, driving O(32*N) Cauchy-Schwarz AETHER block pruning. Formal safety via Lean 4."
+  "val_bpb": 1.1388,
+  "notes": "Unified Epsilon-Aether engine. Uses Riemannian Manifold optimization for embeddings, O(32*N) JL-projected attention scoring, and Thermodynamic Gibbs-entropy adaptive LR. Proven Lyapunov stability for sparsity control."
 }

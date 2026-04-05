@@ -30,6 +30,7 @@ Happy training!
 
 | Run | Score | Author | Summary | Date | Info |
 |-----|------:|--------|---------|------|------|
+| EPSILON-AETHER (12L + S^31 JL-Bridge) | 1.1388 | Teerth Sharma | 12L, JL-Projected Sparse Attention, AETHER Governor, int5/int6, SmearGate | 2026-03-25 | [info](records/track_10min_16mb/2026-03-25_Epsilon_Aether_Sparsity/README.md) |
 | 10L Int5-MLP + BigramHash(10240) | 1.1428 | thwu1 | 10 layers, mixed int5/int6 quantization, BigramHash(10240), SWA(0.4), WD=0.04 | 2026-03-20 | [info](records/track_10min_16mb/2026-03-20_10L_Int5MLP_MuonWD04_SWA50/README.md) |
 | Int6 MLP3x + SmearGate + BigramHash | 1.1458 | Raahil Shah | 3x MLP + SmearGate + BigramHash + OrthoInit + Muon WD + SWA | 2026-03-20 | [info](records/track_10min_16mb/2026-03-20_Int6_MLP3x_SmearGate_BigramHash_MuonWD_SWA/README.md) |
 | 11L MLP3x + Int6 QAT | 1.1502 | aruniyer | 11 layers, 3x MLP, int6 QAT, zstd-22, WD=0.04, sliding eval | 2026-03-20 | [info](records/track_10min_16mb/2026-03-19_MLP3x_QAT_Int6_SlidingWindow/README.md) |
