@@ -71,6 +71,8 @@ class Hyperparameters:
     model_dim = int(os.environ.get("MODEL_DIM", 512))
     num_heads = int(os.environ.get("NUM_HEADS", 8))
     mlp_mult = float(os.environ.get("MLP_MULT", 2.5))
+    rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
+    logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
 
     # AETHER Sparse Attention Config
     aether_enabled = bool(int(os.environ.get("AETHER_ENABLED", "1")))
@@ -363,6 +365,7 @@ def aether_sparse_sdpa(q: Tensor, k: Tensor, v: Tensor, governor: AetherGovernor
     return y
 
 _aether_governor, _aether_step = None, 0
+_aether_cfg = {"enabled": True, "block_size": 64, "warmup_steps": 500, "min_seq": 256}
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int, num_kv_heads: int, rope_base: float, qk_gain_init: float):
@@ -373,14 +376,14 @@ class CausalSelfAttention(nn.Module):
         self.q_gain = nn.Parameter(torch.full((num_heads,), qk_gain_init))
         self.rotary = Rotary(self.head_dim, rope_base)
     def forward(self, x: Tensor) -> Tensor:
-        global _aether_governor, _aether_step
+        global _aether_governor, _aether_step, _aether_cfg
         B, S, D = x.shape
         q, k, v = self.c_q(x).reshape(B, S, self.num_heads, self.head_dim).transpose(1, 2), self.c_k(x).reshape(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2), self.c_v(x).reshape(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
         cos, sin = self.rotary(S, x.device, q.dtype)
         q, k = apply_rotary_emb(F.rms_norm(q, (D//self.num_heads,)), cos, sin), apply_rotary_emb(F.rms_norm(k, (D//self.num_heads,)), cos, sin)
         q *= self.q_gain.to(q.dtype)[None, :, None, None]
-        if self.training and _aether_governor and _aether_step > 500 and S >= 256:
-            y = aether_sparse_sdpa(q, k, v, _aether_governor)
+        if self.training and _aether_cfg["enabled"] and _aether_governor and _aether_step > _aether_cfg["warmup_steps"] and S >= _aether_cfg["min_seq"]:
+            y = aether_sparse_sdpa(q, k, v, _aether_governor, block_size=_aether_cfg["block_size"])
         else:
             y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         return self.proj(y.transpose(1, 2).reshape(B, S, D))
@@ -462,7 +465,7 @@ def eval_val(args, model, val_tokens, device):
     return loss_sum / count
 
 def main():
-    global _aether_governor, _aether_step
+    global _aether_governor, _aether_step, _aether_cfg
     args = Hyperparameters()
     rank, world_size = int(os.environ.get("RANK", 0)), int(os.environ.get("WORLD_SIZE", 1))
     device = torch.device("cuda", int(os.environ.get("LOCAL_RANK", 0)))
@@ -483,12 +486,25 @@ def main():
     opt_adam = torch.optim.AdamW(s_params, lr=args.scalar_lr, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
     opt_sphere = RiemannianSphereAdam(e_params, lr=args.embed_lr)
     opts = [opt_muon, opt_adam, opt_sphere]
+    for opt in opts:
+        for g in opt.param_groups:
+            g["base_lr"] = g["lr"]
     
     loader = DistributedTokenLoader(args.train_files, rank, world_size, device)
-    _aether_governor = AetherGovernor(args.aether_target_sparsity, args.aether_governor_alpha, args.aether_governor_beta)
+    _aether_cfg = {
+        "enabled": args.aether_enabled,
+        "block_size": args.aether_block_size,
+        "warmup_steps": args.aether_warmup_steps,
+        "min_seq": args.aether_min_seq,
+    }
+    _aether_governor = AetherGovernor(args.aether_target_sparsity, args.aether_governor_alpha, args.aether_governor_beta) if args.aether_enabled else None
     
     t0 = time.perf_counter()
     for step in range(args.iterations + 1):
+        if args.max_wallclock_seconds > 0 and (time.perf_counter() - t0) >= args.max_wallclock_seconds:
+            if rank == 0:
+                print(f"Stopping at step {step}: reached MAX_WALLCLOCK_SECONDS={args.max_wallclock_seconds}")
+            break
         _aether_step = step
         scale = max(0, 1 - step/args.iterations) if step > args.iterations - args.warmdown_iters else 1.0
         
@@ -502,22 +518,28 @@ def main():
         # Thermodynamic Scaling
         t_scale = get_thermodynamic_scale(loss.item())
         for opt in opts:
-            for g in opt.param_groups: g["lr"] = g.get("base_lr", g["lr"]) * scale * t_scale
+            for g in opt.param_groups:
+                g["lr"] = g["base_lr"] * scale * t_scale
             
         torch.nn.utils.clip_grad_norm_(base_model.parameters(), args.grad_clip_norm)
         for opt in opts: opt.step()
         
-        if step % args.train_log_every == 0 and rank == 0:
+        if args.train_log_every > 0 and step % args.train_log_every == 0 and rank == 0:
             print(f"step:{step} loss:{loss.item():.4f} time:{(time.perf_counter()-t0):.1f}s")
         
-        if step % args.val_loss_every == 0 and rank == 0:
+        if args.val_loss_every > 0 and step % args.val_loss_every == 0 and rank == 0:
             v_loss = eval_val(args, base_model, val_tokens, device)
             print(f"STEP {step} VAL LOSS: {v_loss:.4f}")
 
     # Serialization (simplified for brevity)
     if rank == 0:
+        final_val_loss = eval_val(args, base_model, val_tokens, device)
+        print(f"FINAL VAL LOSS: {final_val_loss:.4f}")
         torch.save(base_model.state_dict(), "final_model.pt")
         print("Model saved. Pushing to leaderboard...")
+    if world_size > 1:
+        dist.barrier()
+        dist.destroy_process_group()
 
 def load_validation_tokens(pattern, seq_len):
     files = sorted(glob.glob(pattern))
