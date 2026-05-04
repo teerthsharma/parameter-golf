@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Teerth Sharma
+# SPDX-License-Identifier: Custom-Attribution-1.0
+
 """Download docs_selected.jsonl from Hugging Face and tokenize it locally.
 
 This script is standalone. It does not import any local exporter or tokenizer

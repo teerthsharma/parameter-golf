@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Teerth Sharma
+# SPDX-License-Identifier: Custom-Attribution-1.0
+
 import argparse
 import json
 import os
